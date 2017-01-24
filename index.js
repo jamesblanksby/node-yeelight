@@ -63,6 +63,17 @@ Yeelight.prototype.connect = function(device) {
 
 			this.emit('deviceconnected', device);
 		}.bind(this));
+
+		device.socket.on('error', function(error) {
+			// intentionally left empty
+		}.bind(this));
+
+		device.socket.on('close', function() {
+			device.socket.destroy();
+			this.emit('devicedisconnected', device);
+			device.connected = false;
+			device.socket = null
+		}.bind(this));
 	}
 };
 
@@ -138,7 +149,7 @@ Yeelight.prototype.addDevice = function(device) {
 	    // overwrite the device
       	dev = device;
       	this.emit('deviceupdated', device);
-	} 
+	}
 	// if device isn't in list
 	else {
 		// push new device into array
@@ -147,7 +158,7 @@ Yeelight.prototype.addDevice = function(device) {
 	}
 };
 
-Yeelight.prototype.setPower = function(device, state, speed) {	
+Yeelight.prototype.setPower = function(device, state, speed) {
 	speed = speed || 300;
 
 	var on_off = state === true ? 'on' : 'off';
