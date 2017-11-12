@@ -97,8 +97,17 @@ Yeelight.prototype.handleDiscovery = function(message, address) {
 			device.brightness = headers[i].slice(8);
 		if (headers[i].indexOf("model:") >= 0)
 			device.model = headers[i].slice(7);
-        if (headers[i].indexOf("rgb:") >= 0)
-            device.rgb = headers[i].slice(5);
+        if (headers[i].indexOf("rgb:") >= 0) {
+            var rgb_dec = headers[i].slice(5); 
+            if (rgb_dec > 0) {
+                var rgb = [
+                    (rgb_dec >> 16) & 0xff,
+                    (rgb_dec >> 8) & 0xff,
+                    rgb_dec & 0xff
+                ];
+                device.rgb = rgb;
+            }
+        }
 		if (headers[i].indexOf("hue:") >= 0)
 			device.hue = headers[i].slice(5);
 		if (headers[i].indexOf("sat:") >= 0)
@@ -179,7 +188,6 @@ Yeelight.prototype.setBrightness = function(device, percentage, speed) {
 Yeelight.prototype.setRGB = function(device, rgb, speed) {
     speed = speed || 300;
 
-    rgb = rgb.split(',').map(Number);
     var rgb_dec = (rgb[0] * 65536) + (rgb[1] * 256) + rgb[2];
 
     device.rgb = rgb_dec;
