@@ -212,11 +212,11 @@ Yeelight.prototype.sendCommand = function(device, command, callback) {
 
 	var message = JSON.stringify(command);
 
-	device.socket.write(message + '\r\n');
-
-	if (typeof callback !== 'undefined') {
-		callback(device);
-	}
+	device.socket.write(message + '\r\n', 'utf8', function () {
+		if (typeof callback !== 'undefined') {
+			callback(device);
+		}
+	});
 };
 
 Yeelight.prototype.devices = [];
