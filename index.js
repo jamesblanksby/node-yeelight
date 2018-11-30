@@ -13,12 +13,64 @@ const options = {
   discoveryMsg: 'M-SEARCH * HTTP/1.1\r\nMAN: "ssdp:discover"\r\nST: wifi_bulb\r\n'
 }
 
+function wrapDevice (device) {
+  return new Proxy(device, {
+    get (target, name) {
+      switch (name) {
+        // return custom attributes as is
+        case 'properties':
+        case 'socket':
+        case 'connected':
+          return target[name]
+
+        // for compatibility with previous interface
+        case 'host':
+        case 'port': {
+          const parsed = url.parse(target.properties.location)
+          return name === 'host'
+            ? parsed.hostname
+            : parsed.port
+        }
+
+        // transform properties
+        case 'rgb':
+          return [
+            (target.properties.rgb >> 16) & 0xff,
+            (target.properties.rgb >> 8) & 0xff,
+            (target.properties.rgb) & 0xff
+          ]
+
+        // pass through all other properties
+        default:
+          return target.properties[name]
+      }
+    },
+    set (target, name, value) {
+      switch (name) {
+        case 'properties':
+          Object.assign(target.properties, value)
+          return true
+        case 'socket':
+        case 'connected':
+          target[name] = value
+          return true
+        default:
+          if (Object.keys(target.properties).indexOf(name) !== -1) {
+            target.properties[name] = value
+            return true
+          }
+          return false
+      }
+    }
+  })
+}
+
 class Yeelight extends EventEmitter {
   constructor () {
     super()
 
     this.devices = []
-    this.socket = dgram.createSocket('udp4', this.handleDiscovery.bind(this)) // udp bits
+    this.socket = dgram.createSocket('udp4', this.handleDiscovery.bind(this))
   }
 
   /**
@@ -39,8 +91,9 @@ class Yeelight extends EventEmitter {
    * Send a search request to discover available devices.
    */
   discover () {
-    const message = options.discoveryMsg
-    this.sendMessage(message, options.multicastAddr)
+    this.socket.send(options.discoveryMsg, options.port, options.multicastAddr, (err) => {
+      if (err) throw err // todo: handle error (what error?)
+    })
   }
 
   /**
@@ -71,75 +124,42 @@ class Yeelight extends EventEmitter {
     }
   }
 
-  sendMessage (message, address, callback) {
-    const buffer = Buffer.from(message) // todo check if this works
-    this.socket.send(buffer, 0, buffer.length, options.port, address, (err, bytes) => {
-      if (err) throw err
-    })
-  }
-
-  handleDiscovery (message, address) {
+  handleDiscovery (data, from) {
     // if we sent the message, ignore it
-    if (ip.address() === address.address) {
+    if (ip.address() === from.address) {
       return
     }
 
-    const headers = httpResponse(message.toString()).headers
-    const device = {}
+    const deviceInfo = wrapDevice({
+      properties: httpResponse(data.toString()).headers,
+      connected: false,
+      socket: null
+    })
 
-    // set defaults
-    device.connected = false
-    device.socket = null
-
-    device.id = headers.id
-    device.location = headers.location
-
-    const parsedUrl = url.parse(headers.location)
-    device.host = parsedUrl.hostname
-    device.port = parsedUrl.port
-
-    device.power = headers.power
-    device.brightness = headers.bright
-    device.model = headers.model
-
-    device.rgb = [
-      (headers.rgb >> 16) & 0xff,
-      (headers.rgb >> 8) & 0xff,
-      (headers.rgb) & 0xff
-    ]
-
-    device.hue = headers.hue
-    device.sat = headers.sat
-
-    this.addDevice(device)
+    this.addDevice(deviceInfo)
   }
 
   addDevice (device) {
     // check if device exists in array
-    if (_.filter(this.devices, { id: device.id }).length > 0) {
-      // check if existing object is exactly the same as the device we're passing it
-      if (_.isEqual(device, _.filter(this.devices, {
-        id: device.id
-      }))) {
-        // don't do anything else
-        return
+    const existing = _.find(this.devices, { id: device.id })
+
+    if (existing) {
+      // check if existing object is exactly the same as the device we're trying to add
+      if (_.isEqual(existing.properties, device.properties)) {
+        return // do nothing
       }
 
-      // get our device from the list
-      const index = _.findIndex(this.devices, { id: device.id })
+      // the device was updated
+      existing.properties = device.properties
+      // todo: reconnect control socket if location has changed
 
-      if (index !== -1) {
-        // overwrite the device
-        this.devices[index] = device
-      }
-
-      this.emit('deviceupdated', device)
-    } else {
-      // if device isn't in list
-      // push new device into array
-      this.devices.push(device)
-      this.emit('deviceadded', device)
+      this.emit('deviceupdated')
+      return
     }
+
+    // if device isn't in list, push new device into array
+    this.devices.push(device)
+    this.emit('deviceadded', device)
   }
 
   setPower (device, state, speed) {
