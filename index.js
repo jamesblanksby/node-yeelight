@@ -2,48 +2,51 @@ const dgram = require('dgram')
 const EventEmitter = require('events').EventEmitter
 const ip = require('ip') // working with IP addresses
 const net = require('net') // yeelight networking
+const url = require('url')
+
 const _ = require('lodash') // for string padding and object-getting
+const httpResponse = require('http-headers')
+
+const options = {
+  port: 1982,
+  multicastAddr: '239.255.255.250',
+  discoveryMsg: 'M-SEARCH * HTTP/1.1\r\nMAN: "ssdp:discover"\r\nST: wifi_bulb\r\n'
+}
 
 class Yeelight extends EventEmitter {
   constructor () {
     super()
 
     this.devices = []
-    this.socket = dgram.createSocket('udp4') // udp bits
-
-    process.nextTick(() => {
-      // listen for messages
-      this.socket.on('message', (message, address) => {
-        // if we sent the message, ignore it
-        if (ip.address() === address.address) {
-          return
-        }
-
-        // handle socket discovery message
-        this.handleDiscovery(message, address)
-      })
-    })
+    this.socket = dgram.createSocket('udp4', this.handleDiscovery.bind(this)) // udp bits
   }
 
-  // listens on options.port
+  /**
+   * Listen for search responses and state refresh messages.
+   */
   listen () {
     try {
       this.socket.bind(options.port, () => {
         this.socket.setBroadcast(true)
+        this.emit('ready', options.port)
       })
-
-      this.emit('ready', options.port)
     } catch (ex) {
       throw ex
     }
   }
 
-  // discover() sends out a broadcast message to find all available devices.
+  /**
+   * Send a search request to discover available devices.
+   */
   discover () {
     const message = options.discoveryMsg
     this.sendMessage(message, options.multicastAddr)
   }
 
+  /**
+   * Establish control connection to a device.
+   * @param device
+   */
   connect (device) {
     if (device.connected === false && device.socket === null) {
       device.socket = new net.Socket()
@@ -76,38 +79,37 @@ class Yeelight extends EventEmitter {
   }
 
   handleDiscovery (message, address) {
-    const headers = message.toString().split('\r\n')
+    // if we sent the message, ignore it
+    if (ip.address() === address.address) {
+      return
+    }
+
+    const headers = httpResponse(message.toString()).headers
     const device = {}
 
     // set defaults
     device.connected = false
     device.socket = null
 
-    // build device params
-    for (let i = 0; i < headers.length; i++) {
-      if (headers[i].indexOf('id:') >= 0) { device.id = headers[i].slice(4) }
-      if (headers[i].indexOf('Location:') >= 0) {
-        device.location = headers[i].slice(10)
-        const tmp = device.location.split(':')
-        device.host = tmp[1].replace('//', '')
-        device.port = parseInt(tmp[2], 10)
-      }
-      if (headers[i].indexOf('power:') >= 0) { device.power = headers[i].slice(7) }
-      if (headers[i].indexOf('bright:') >= 0) { device.brightness = headers[i].slice(8) }
-      if (headers[i].indexOf('model:') >= 0) { device.model = headers[i].slice(7) }
-      if (headers[i].indexOf('rgb:') >= 0) {
-        const rgbDec = headers[i].slice(5)
-        if (rgbDec > 0) {
-          device.rgb = [
-            (rgbDec >> 16) & 0xff,
-            (rgbDec >> 8) & 0xff,
-            rgbDec & 0xff
-          ]
-        }
-      }
-      if (headers[i].indexOf('hue:') >= 0) { device.hue = headers[i].slice(5) }
-      if (headers[i].indexOf('sat:') >= 0) { device.saturation = headers[i].slice(5) }
-    }
+    device.id = headers.id
+    device.location = headers.location
+
+    const parsedUrl = url.parse(headers.location)
+    device.host = parsedUrl.hostname
+    device.port = parsedUrl.port
+
+    device.power = headers.power
+    device.brightness = headers.bright
+    device.model = headers.model
+
+    device.rgb = [
+      (headers.rgb >> 16) & 0xff,
+      (headers.rgb >> 8) & 0xff,
+      (headers.rgb) & 0xff
+    ]
+
+    device.hue = headers.hue
+    device.sat = headers.sat
 
     this.addDevice(device)
   }
@@ -211,12 +213,6 @@ class Yeelight extends EventEmitter {
       }
     })
   }
-}
-
-const options = {
-  port: 1982,
-  multicastAddr: '239.255.255.250',
-  discoveryMsg: 'M-SEARCH * HTTP/1.1\r\nMAN: "ssdp:discover"\r\nST: wifi_bulb\r\n'
 }
 
 module.exports = Yeelight
