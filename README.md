@@ -64,6 +64,13 @@ y.on('deviceconnected', function(device) {
     300 // transition speed in ms
   );
   
+  //set Yeelight RGB color
+  yeelight.setRGB(
+     device, // device object
+     [255,255,255], // rgb code
+     300 //transition speed in ms
+  );
+  
 });
 ```
 
